@@ -30,6 +30,9 @@ typedef struct {
 Aeronave cria_aeronave(pid_t pid, char lado_entrada, double coordenada_y, int atraso, int pista_pouso, double coordenada_x, double velocidade, double distancia_pouso, int velocidade_reduzida, int pista_alternativa, int pouso_realizado);
 int pista(int lado_entrada, double coordenada_y);
 double distancia(double coordenada_x, double coordenada_y);
+int proximidade(Aeronave *mem, int num_aeronave);
+int pista_livre(Aeronave *mem, int num_aeronave, int pista);
+int pista_alternativa(int lado_entrada, int pista_atual);   
 
 int main() {
     int num_aeronave = 5;
@@ -104,13 +107,15 @@ int main() {
         printf("\n--- Status das Aeronaves ---\n");
         todas_pousaram = 1;
         for (int i = 0; i < num_aeronave; i++) {
-            printf("Aeronave %d: | Distância: %.2f | Coordenadas: %.2f, %.2f | Pouso: %s\n",
+            printf("Aeronave %d: | Distância: %.2f | Coordenadas: %.2f, %.2f | Pouso: %s | Pista: %d\n",
                    i + 1, mem[i].distancia_pouso, mem[i].coordenada_x, mem[i].coordenada_y,
-                   mem[i].pouso_realizado ? "Sim" : "Não");
+                   mem[i].pouso_realizado ? "Sim" : "Não", mem[i].pista_pouso);
             if (!mem[i].pouso_realizado) {
                 todas_pousaram = 0;
             }
         }
+        printf("---------------------------\n");
+        int colisao = proximidade(mem, num_aeronave);
         printf("---------------------------\n");
     }
 
@@ -169,4 +174,50 @@ int pista(int lado_entrada, double coordenada_y) {
 
 double distancia(double coordenada_x, double coordenada_y) {
     return sqrt(pow(coordenada_x - 0.5, 2) + pow(coordenada_y - 0.5, 2));
+}
+
+int proximidade(Aeronave *mem, int num_aeronave) {
+    for (int i = 0; i < num_aeronave; i++) {
+        if (mem[i].pouso_realizado == 0 && mem[i].distancia_pouso != 0.0) {
+            for (int j = i+1; j < num_aeronave; j++) {
+                if (mem[j].pouso_realizado == 0 && mem[j].distancia_pouso != 0.0) {
+                    double distancia_x_entre_aeronaves = fabs(mem[i].coordenada_x - mem[j].coordenada_x);
+                    double distancia_y_entre_aeronaves = fabs(mem[i].coordenada_y - mem[j].coordenada_y);
+
+                    if (distancia_x_entre_aeronaves < 0.1 && distancia_y_entre_aeronaves < 0.1 && mem[i].pista_pouso == mem[j].pista_pouso) {
+                        printf("Possível colisão entre [Aeronave %d | PID %d | Pista: %d] e [Aeronave %d | PID %d | Pista: %d]\n",
+                                 i+1, mem[i].pid, mem[i].pista_pouso, j+1, mem[j].pid, mem[j].pista_pouso);
+
+                        int pista_alt = pista_alternativa(mem[i].lado_entrada, mem[i].pista_pouso);
+                        int pista_alt_livre = pista_livre(mem, num_aeronave, pista_alt);
+                        int aeronave_mais_distante = (mem[i].distancia_pouso > mem[j].distancia_pouso) ? i : j;
+
+                        if (pista_alt_livre) {
+                            printf("Sugestão de troca de pista: [Aeronave %d | PID %d | Pista alternativa: %d]\n", aeronave_mais_distante+1, mem[aeronave_mais_distante].pid, pista_alt);
+                        }
+                        else {
+                            printf("Sugestão de redução de velocidade: [Aeronave %d | PID %d | Pista: %d]\n", aeronave_mais_distante+1, mem[aeronave_mais_distante].pid, mem[aeronave_mais_distante].pista_pouso);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+int pista_alternativa(int lado_entrada, int pista_atual) {
+    if (lado_entrada == 0)
+        return pista_atual == 3 ? 18 : 3;
+    else
+        return pista_atual == 6 ? 27 : 6;
+}
+
+int pista_livre(Aeronave *mem, int num_aeronave, int pista) {
+    for (int i = 0; i < num_aeronave; i++) {
+        if (mem[i].pouso_realizado == 0 && mem[i].pista_pouso == pista) {
+            return 0;
+        }
+    }
+    return 1;
 }
