@@ -9,7 +9,6 @@
 #include <math.h>
 
 #define VELOCIDADE 0.05
-#define NUM_AERONAVES 3
 
 typedef struct {
     pid_t pid;
@@ -22,6 +21,7 @@ typedef struct {
     double x_inicial;
     double velocidade;
     int velocidade_reduzida;
+    int qtd_reducoes;
     double distancia_pouso;
     double distancia_inicial;
     int pista_alternativa;
@@ -30,7 +30,7 @@ typedef struct {
     int ultimo_ciclo_reducao;
 } Aeronave;
 
-Aeronave cria_aeronave(pid_t pid, char lado_entrada, double coordenada_y, int atraso, int pista_pouso, double coordenada_x, double velocidade, double distancia_pouso, int velocidade_reduzida, int pista_alternativa, int pouso_realizado, int em_proximidade);
+Aeronave cria_aeronave(pid_t pid, char lado_entrada, double coordenada_y, int atraso, double coordenada_x);
 int pista(int lado_entrada, double coordenada_y);
 double distancia(double coordenada_x, double coordenada_y);
 int proximidade(Aeronave *mem);
@@ -40,10 +40,24 @@ void toggle_velocidade(int sig);
 void toggle_pista_alternativa(int sig); 
 void atualizar_aeronave_local(Aeronave *local, Aeronave *mem);
 int global_shmid; // novo: permite acesso à memória no handler
+int global_num_aeronaves; // usado nos handlers
+//
+int global_colisoes = 0;
 
+int main(int argc, char *argv[]) 
+{
+    if (argc != 2) {
+        fprintf(stderr, "Uso: %s <num_aeronaves>\n", argv[0]);
+        exit(1);
+    }
+    int num_aeronaves = atoi(argv[1]);
+    if (num_aeronaves <= 0) {
+        fprintf(stderr, "Erro: número de aeronaves inválido.\n");
+        exit(1);
+    }
+    global_num_aeronaves = num_aeronaves;
 
-int main() {
-    int shmid = shmget(IPC_PRIVATE, sizeof(Aeronave) * NUM_AERONAVES, IPC_CREAT | 0666);
+    int shmid = shmget(IPC_PRIVATE, sizeof(Aeronave) * num_aeronaves, IPC_CREAT | 0666);
     if (shmid < 0) {
         perror("shmget");
         exit(1);
@@ -56,27 +70,19 @@ int main() {
         exit(1);
     }
 
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < num_aeronaves; i++) {
         pid_t pid = fork();
         if (pid == 0) {
             srand(time(NULL) + getpid());
             int lado_entrada = rand() % 2;
             double coordenada_y = (double) rand() / RAND_MAX;
             int atraso = rand() % 3;
-            int pista_pouso = pista(lado_entrada, coordenada_y);
             double coordenada_x = (lado_entrada == 0) ? 0.0 : 1.0;
-            double velocidade = VELOCIDADE;
-            double distancia_pouso = distancia(coordenada_x, coordenada_y);
-            int velocidade_reduzida = 0;
-            int pista_alternativa = calcula_pista_alternativa(lado_entrada, pista_pouso);
-            int pouso_realizado = 0;
-            int em_proximidade = 0;
             pid_t meu_pid = getpid();
-            const char *lado = lado_entrada == 0 ? "Oeste" : "Leste";
 
-            printf("[Aeronave %d | PID %d] Atraso: %ds\n",i + 1, meu_pid, atraso);
+            printf("[Aeronave %d | PID %d] Atraso: %ds\n", i + 1, meu_pid, atraso);
             sleep(atraso);
-            Aeronave x = cria_aeronave(meu_pid, lado_entrada, coordenada_y, atraso, pista_pouso, coordenada_x, velocidade, distancia_pouso, velocidade_reduzida, pista_alternativa, pouso_realizado, em_proximidade);
+            Aeronave x = cria_aeronave(meu_pid, lado_entrada, coordenada_y, atraso, coordenada_x);
             printf("[Aeronave %d | PID %d] Entrou no espaço aéreo.\n", i + 1, meu_pid);
             mem[i] = x;
             signal(SIGUSR1, toggle_velocidade);//handler 1
@@ -100,6 +106,7 @@ int main() {
                     if (x.coordenada_y < 0.5) x.coordenada_y = 0.5;
                 }
                 x.distancia_pouso = distancia(x.coordenada_x, x.coordenada_y);
+                x.qtd_reducoes = mem[i].qtd_reducoes;
                 mem[i] = x;
             }
 
@@ -118,7 +125,7 @@ int main() {
         ciclo_atual++;
         printf("\n--- Status das Aeronaves ---\n");
         todas_pousaram = 1;
-        for (int i = 0; i < NUM_AERONAVES; i++) {
+        for (int i = 0; i < num_aeronaves; i++) {
             printf("Aeronave %d: | Distância: %.2f | Coordenadas: %.2f, %.2f | Pouso: %s | Pista: %d | Velocidade: %.2f\n",
                    i + 1, mem[i].distancia_pouso, mem[i].coordenada_x, mem[i].coordenada_y,
                    mem[i].pouso_realizado ? "Sim" : "Não", mem[i].pista_pouso, mem[i].velocidade);
@@ -130,15 +137,19 @@ int main() {
                 kill(mem[i].pid, SIGUSR1);
             }
         }
-        int colisao = proximidade(mem);
+        int colisao = proximidade(mem); //TODO: DESMEMBRAR COLISOES
+        if (colisao == -1)
+        {
+            printf("Colisoes: %d\n",global_colisoes);
+        }
         printf("---------------------------\n");
     }
 
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < num_aeronaves; i++) {
         wait(NULL);
     }
 
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < num_aeronaves; i++) {
         printf("\nAeronave %d:\n", i+1);
         printf("PID: %d\n", mem[i].pid);
         printf("Lado de entrada: %s\n", mem[i].lado_entrada == 0 ? "Oeste" : "Leste");
@@ -149,7 +160,7 @@ int main() {
         printf("Velocidade: %.2f\n", mem[i].velocidade);
         printf("Distancia de pouso inicial: %.2f\n", mem[i].distancia_inicial);
         printf("Distancia de pouso: %.2f\n", mem[i].distancia_pouso);
-        printf("Velocidade reduzida: %d\n", mem[i].velocidade_reduzida);
+        printf("Velocidade reduzida: %d\n", mem[i].qtd_reducoes);
         printf("Pista alternativa: %d\n", mem[i].pista_alternativa);
         printf("Pouso realizado: %d\n", mem[i].pouso_realizado);
         printf("------------------------\n");
@@ -160,24 +171,26 @@ int main() {
     return 0;
 }
 
-Aeronave cria_aeronave(pid_t pid, char lado_entrada, double coordenada_y, int atraso, int pista_pouso, double coordenada_x, double velocidade, double distancia_pouso, int velocidade_reduzida, int pista_alternativa, int pouso_realizado, int em_proximidade) {
+Aeronave cria_aeronave(pid_t pid, char lado_entrada, double coordenada_y, int atraso, double coordenada_x) {
     Aeronave aviao;
     aviao.pid = pid;
     aviao.lado_entrada = lado_entrada;
     aviao.coordenada_y = coordenada_y;
     aviao.y_inicial = coordenada_y;
     aviao.atraso = atraso;
-    aviao.pista_pouso = pista_pouso;
     aviao.coordenada_x = coordenada_x;
     aviao.x_inicial = coordenada_x;
-    aviao.velocidade = velocidade;
-    aviao.distancia_pouso = distancia_pouso;
-    aviao.distancia_inicial = distancia_pouso;
-    aviao.velocidade_reduzida = velocidade_reduzida;
-    aviao.pista_alternativa = pista_alternativa;
-    aviao.pouso_realizado = pouso_realizado;
-    aviao.em_proximidade = em_proximidade;
+    aviao.pista_pouso = pista(lado_entrada, coordenada_y);
+    aviao.distancia_pouso = distancia(coordenada_x, coordenada_y);
+    aviao.distancia_inicial = aviao.distancia_pouso;
+    aviao.pista_alternativa = calcula_pista_alternativa(lado_entrada, aviao.pista_pouso);
+    aviao.velocidade = VELOCIDADE;
+    aviao.velocidade_reduzida = 0;
+    aviao.qtd_reducoes = 0;
+    aviao.pouso_realizado = 0;
+    aviao.em_proximidade = 0;
     aviao.ultimo_ciclo_reducao = 0;
+    
     return aviao;
 }
 
@@ -196,12 +209,12 @@ double distancia(double coordenada_x, double coordenada_y) {
 int proximidade(Aeronave *mem) {
     static int ciclo_atual = 0;
     ciclo_atual++;
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < global_num_aeronaves; i++) {
         mem[i].em_proximidade = 0;
     }
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < global_num_aeronaves; i++) {
         if (mem[i].pouso_realizado == 0 && mem[i].distancia_pouso != 0.0) {
-            for (int j = i+1; j < NUM_AERONAVES; j++) {
+            for (int j = i+1; j < global_num_aeronaves; j++) {
                 if (mem[j].pouso_realizado == 0 && mem[j].distancia_pouso != 0.0) {
                     double distancia_x_entre_aeronaves = fabs(mem[i].coordenada_x - mem[j].coordenada_x);
                     double distancia_y_entre_aeronaves = fabs(mem[i].coordenada_y - mem[j].coordenada_y);
@@ -222,19 +235,28 @@ int proximidade(Aeronave *mem) {
                             printf("Sugestão de troca de pista: [Aeronave %d | PID %d | Pista alternativa: %d]\n", aeronave_mais_distante+1, mem[aeronave_mais_distante].pid, pista_alt);
                             kill(mem[aeronave_mais_distante].pid, SIGUSR2);
                         }
-                        else {
+                        else if (!mem[aeronave_mais_distante].velocidade_reduzida){
                             printf("Sugestão de redução de velocidade: [Aeronave %d | PID %d | Pista: %d]\n", aeronave_mais_distante+1, mem[aeronave_mais_distante].pid, mem[aeronave_mais_distante].pista_pouso);
                             if (!mem[aeronave_mais_distante].velocidade_reduzida) {
                                 mem[aeronave_mais_distante].ultimo_ciclo_reducao = ciclo_atual;
                                 kill(mem[aeronave_mais_distante].pid, SIGUSR1);
                             }
                         }
+                        else{
+                            printf("COLISAO INEVITÁVEL! Aeronave %d (PID %d) REMOVIDA.\n", aeronave_mais_distante+1, mem[aeronave_mais_distante].pid);
+                                kill(mem[aeronave_mais_distante].pid, SIGKILL);
+                                mem[aeronave_mais_distante].pouso_realizado = 1; // considera como "encerrado"
+                                mem[aeronave_mais_distante].distancia_pouso = 0.0;
+                                mem[aeronave_mais_distante].velocidade = 0.0;
+                                global_colisoes += 1;
+                                return -1;
+                        }
                     }
                 }
             }
         }
     }
-    return -1;
+    return 0;
 }
 
 int calcula_pista_alternativa(int lado_entrada, int pista_atual) {
@@ -245,7 +267,7 @@ int calcula_pista_alternativa(int lado_entrada, int pista_atual) {
 }
 
 int pista_livre(Aeronave *mem, int pista) {
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < global_num_aeronaves; i++) {
         if (mem[i].pouso_realizado == 0 && mem[i].pista_pouso == pista) {
             return 0;
         }
@@ -260,7 +282,7 @@ void toggle_velocidade(int sig) {
         perror("shmat no sinal");
         exit(1);
     }
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < global_num_aeronaves; i++) {
         if (mem[i].pid == getpid()) {
             if (mem[i].velocidade == 0.0) {
                 // Só normaliza se não estiver em proximidade
@@ -273,6 +295,7 @@ void toggle_velocidade(int sig) {
                 mem[i].velocidade = 0.0;
                 mem[i].velocidade_reduzida = 1;
                 printf("[Aeronave %d | PID %d] Velocidade REDUZIDA por sinal\n", i+1, getpid());
+                mem[i].qtd_reducoes++;
             }
             break;
         }
@@ -286,7 +309,7 @@ void toggle_pista_alternativa(int sig) {
         perror("shmat no sinal");
         exit(1);
     }
-    for (int i = 0; i < NUM_AERONAVES; i++) {
+    for (int i = 0; i < global_num_aeronaves; i++) {
         if (mem[i].pid == getpid()) {
             int pista_antiga = mem[i].pista_pouso;
             mem[i].pista_pouso = mem[i].pista_alternativa;
